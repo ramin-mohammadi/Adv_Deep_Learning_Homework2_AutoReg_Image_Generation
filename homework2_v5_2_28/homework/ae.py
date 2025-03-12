@@ -1,0 +1,198 @@
+import abc
+
+import torch
+
+
+def load() -> torch.nn.Module:
+    from pathlib import Path
+
+    model_name = "PatchAutoEncoder"
+    model_path = Path(__file__).parent / f"{model_name}.pth"
+    print(f"Loading {model_name} from {model_path}")
+    return torch.load(model_path, weights_only=False)
+
+
+def hwc_to_chw(x: torch.Tensor) -> torch.Tensor:
+    """
+    Convert an arbitrary tensor from (H, W, C) to (C, H, W) format.
+    This allows us to switch from trnasformer-style channel-last to pytorch-style channel-first
+    images. Works with or without the batch dimension.
+    """
+    dims = list(range(x.dim()))
+    dims = dims[:-3] + [dims[-1]] + [dims[-3]] + [dims[-2]]
+    return x.permute(*dims)
+
+# Pytorch adpoted channel first (c x h x w)
+# deep networks that use channel last are faster (h x w x c)
+def chw_to_hwc(x: torch.Tensor) -> torch.Tensor:
+    """
+    The opposite of hwc_to_chw. Works with or without the batch dimension.
+    """
+    dims = list(range(x.dim()))
+    dims = dims[:-3] + [dims[-2]] + [dims[-1]] + [dims[-3]]
+    return x.permute(*dims)
+
+
+class PatchifyLinear(torch.nn.Module):
+    """
+    Takes an image tensor of the shape (B, H, W, 3) and patchifies it into
+    an embedding tensor of the shape (B, H//patch_size, W//patch_size, latent_dim).
+    It applies a linear transformation to each input patch
+
+    Feel free to use this directly, or as an inspiration for how to use conv the the inputs given.
+    """
+
+    def __init__(self, patch_size: int = 25, latent_dim: int = 128):
+        super().__init__()
+        self.patch_conv = torch.nn.Conv2d(3, latent_dim, patch_size, patch_size, bias=False)
+        # torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (B, H, W, 3) an image tensor dtype=float normalized to -1 ... 1
+
+        return: (B, H//patch_size, W//patch_size, latent_dim) a patchified embedding tensor
+        """
+        return chw_to_hwc(self.patch_conv(hwc_to_chw(x)))
+
+"""
+Convolution Notes:
+- Convolution is a spatial anchor (sliding window / kernel / patches) linear operator
+- But problem is everytime we have a convolution layer, input shrinks. Solution is padding
+- If kernel size is kxk, then padding p=(k-1)//2 to maintain original input size after conv layer
+- if kernel is say size 3x3, then padding should be 1 -> (3 = 2p + 1 where p = 1)
+- You should never have a kernel size that is even, if you want to implement padding
+- striding (skipping s pixels for the kernel window) -> will reduce width and height
+    - after a conv layer with striding, output size for height and width is divided by the stride
+- as you convolute want to increase channels (using out_channels param in Conv2d) 
+- maxpooling no longer used because it has become less effective with more complex networks 
+    - maxpool original use was to reduce the size of the image but now we just use striding to do this 
+    - maxpooling can work as a non linear layer
+- To upscale/UpConvolute (increase width and height), use ConvTranspose2d()
+    - Up convolution helps increase the resolution of a region.
+    - Can be seen as artificially placing zeros into input and running conv on it
+    - stride for Conv2d() meant how much we want to downsample, but stride for ConvTranspose2D() means how much we want to upsample
+    - padding for ConvTranspose2d() will cut things from the output so padding of 0 will make output larger and padding 1 will cut and shrink the output
+
+- Output size (height x width) after conv layer = ((Input size−Kernel size + 2*Padding)/Stride) +1
+- Remember, channel after conv layer determined by out_channels parameter in Conv2d()
+"""
+
+"""
+Understanding Convolution being done:
+torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None)
+
+- Patchify Linear
+    torch.nn.Conv2d(3, latent_dim, patch_size, patch_size, bias=False)
+        - input to this layer will be (channel x height x width) -> can assume actual size is (batch x c x h x w)
+        - increase channels from 3 -> latent_dim=128
+        - the patch_size=25 params correspond to kernel_size and stride
+        - kernel_size corresponds to window size during conv operation (25x25)
+        - stide is how many pixels we're skipping as we perform conv operation on kernel window
+            - bc stride=25 and kernel_size=25, we're practically only performing conv operation on "patches" of an image
+            - ex: think of a 50x50 image (height x width), by having stride=25 and kernel_size=25, we have 4 patches/quadrants of the image that we convolute on
+        - outputsize after single one of these conv layers
+            - Ex: if input is 3x150x100 (channel x h x w)
+            - new_channels=128
+            - new_height=((150-25 + 2*0)/25)+1=6
+            - new_width=((100-25 + 2*0)/25)+1=4
+        - So we end up with a 128x6x4 encoded image that we'll feed through a non linear layer
+        - Note DO NOT want to do more than one conv layer bc stride bigger than height and width 
+"""
+
+
+class UnpatchifyLinear(torch.nn.Module):
+    """
+    Takes an embedding tensor of the shape (B, w, h, latent_dim) and reconstructs
+    an image tensor of the shape (B, w * patch_size, h * patch_size, 3).
+    It applies a linear transformation to each input patch
+
+    Feel free to use this directly, or as an inspiration for how to use conv the the inputs given.
+    """
+
+    def __init__(self, patch_size: int = 25, latent_dim: int = 128):
+        super().__init__()
+        self.unpatch_conv = torch.nn.ConvTranspose2d(latent_dim, 3, patch_size, patch_size, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (B, w, h, latent_dim) an embedding tensor
+
+        return: (B, H * patch_size, W * patch_size, 3) a image tensor
+        """
+        return chw_to_hwc(self.unpatch_conv(hwc_to_chw(x)))
+
+"""
+ - PatchAutoEncoder inherits this class
+ - DONT have to write any code in this Base abc class
+ - Its purpose is to define abstract methods (OOP) being required funcitons that have to 
+   be defined in whatever class inherits it, which is done in PatchAutoEncoder class
+"""
+class PatchAutoEncoderBase(abc.ABC):
+    @abc.abstractmethod
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Encode an input image x (B, H, W, 3) into a tensor (B, h, w, bottleneck),
+        where h = H // patch_size, w = W // patch_size and bottleneck is the size of the
+        AutoEncoders bottleneck.
+        """
+
+    @abc.abstractmethod
+    def decode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Decode a tensor x (B, h, w, bottleneck) into an image (B, H, W, 3),
+        We will train the auto-encoder such that decode(encode(x)) ~= x.
+        """
+
+
+class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
+    """
+    Implement a PatchLevel AutoEncoder
+
+    Hint: Convolutions work well enough, no need to use a transformer unless you really want.
+    Hint: See PatchifyLinear and UnpatchifyLinear for how to use convolutions with the input and
+          output dimensions given.
+    Hint: You can get away with 3 layers or less.
+    Hint: Many architectures work here (even a just PatchifyLinear / UnpatchifyLinear).
+          However, later parts of the assignment require both non-linearities (i.e. GeLU) and
+          interactions (i.e. convolutions) between patches.
+    """
+
+    class PatchEncoder(torch.nn.Module):
+        """
+        (Optionally) Use this class to implement an encoder.
+                     It can make later parts of the homework easier (reusable components).
+        """
+
+        def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
+            super().__init__()
+            raise NotImplementedError()
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            raise NotImplementedError()
+
+    class PatchDecoder(torch.nn.Module):
+        def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
+            super().__init__()
+            raise NotImplementedError()
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            raise NotImplementedError()
+
+    def __init__(self, patch_size: int = 25, latent_dim: int = 128, bottleneck: int = 128):
+        super().__init__()
+        raise NotImplementedError()
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """
+        Return the reconstructed image and a dictionary of additional loss terms you would like to
+        minimize (or even just visualize).
+        You can return an empty dictionary if you don't have any additional terms.
+        """
+        raise NotImplementedError()
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError()
+
+    def decode(self, x: torch.Tensor) -> torch.Tensor:
+        raise NotImplementedError()
