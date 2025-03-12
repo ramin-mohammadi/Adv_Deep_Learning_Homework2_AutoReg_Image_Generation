@@ -45,8 +45,7 @@ class PatchifyLinear(torch.nn.Module):
     def __init__(self, patch_size: int = 25, latent_dim: int = 128):
         super().__init__()
         self.patch_conv = torch.nn.Conv2d(3, latent_dim, patch_size, patch_size, bias=False)
-        # torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None)
-
+        
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         x: (B, H, W, 3) an image tensor dtype=float normalized to -1 ... 1
@@ -76,15 +75,22 @@ Convolution Notes:
 
 - Output size (height x width) after conv layer = ((Input size−Kernel size + 2*Padding)/Stride) +1
 - Remember, channel after conv layer determined by out_channels parameter in Conv2d()
+
+- Output Size after convTRANSPOSE layer =(S*(I−1)+K−2P+O)  , S=Stride, I=InputSize, K=KernelSize, P=Padding, O=OutputPadding
 """
 
 """
 Understanding Convolution being done:
-torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None)
+- torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, groups=1, bias=True, padding_mode='zeros', device=None, dtype=None)
 
 - Patchify Linear
     torch.nn.Conv2d(3, latent_dim, patch_size, patch_size, bias=False)
         - input to this layer will be (channel x height x width) -> can assume actual size is (batch x c x h x w)
+            - which is why in forward() we make sure input to conv is cxhxw
+            - Then notice after conv operation in forward(), convert to channel last (hxwxc)
+            - This is bc: 
+               - Pytorch adpoted channel first (c x h x w) -> so this is expected dim for pytorch
+               - But, deep networks that use channel last are FASTER (h x w x c)
         - increase channels from 3 -> latent_dim=128
         - the patch_size=25 params correspond to kernel_size and stride
         - kernel_size corresponds to window size during conv operation (25x25)
@@ -98,6 +104,21 @@ torch.nn.Conv2d(in_channels, out_channels, kernel_size, stride=1, padding=0, dil
             - new_width=((100-25 + 2*0)/25)+1=4
         - So we end up with a 128x6x4 encoded image that we'll feed through a non linear layer
         - Note DO NOT want to do more than one conv layer bc stride bigger than height and width 
+        
+
+- torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, groups=1, bias=True, dilation=1, padding_mode='zeros', device=None, dtype=None)
+
+- Unpatchify Linear
+    torch.nn.ConvTranspose2d(latent_dim, 3, patch_size, patch_size, bias=False)
+        - Reverts our output from Patchify Linear to original dimensions (batch x 3 x 150 x 100)
+        - ConvTRANSPOSE() allows us to upscale width and height
+            - input is (batch x 128 x 6 x 4) (batch x channel x height x width) 
+            - channel reduced: 128 -> 3
+            - the patch_size params correspond to kernel_size and stride
+            - new_height=(S*(I−1)+K−2P+O) = (25*(6-1)+25-(2*0)+0) = 150
+            - new_width=(25*(4-1)+25-(2*0)+0) = 100
+            - so we end up with original dimension: batch x 3 x 150 x 100
+        - again in forward() after perform conv layer, put back into channel last (hxwxc)
 """
 
 
@@ -141,7 +162,7 @@ class PatchAutoEncoderBase(abc.ABC):
     def decode(self, x: torch.Tensor) -> torch.Tensor:
         """
         Decode a tensor x (B, h, w, bottleneck) into an image (B, H, W, 3),
-        We will train the auto-encoder such that decode(encode(x)) ~= x.
+        We will train the auto-encoder such that decode(encode(x)) ~= x. -> Decode will be as close as possible to original input
         """
 
 
@@ -166,22 +187,30 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
 
         def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
             super().__init__()
-            raise NotImplementedError()
+            #raise NotImplementedError()
+            self.encode=PatchifyLinear(patch_size, latent_dim)
+            self.gelu=torch.nn.GELU()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            raise NotImplementedError()
+            #raise NotImplementedError()
+            return sefl.gelu( self.encode(x) )
 
     class PatchDecoder(torch.nn.Module):
         def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
             super().__init__()
-            raise NotImplementedError()
+            #raise NotImplementedError()
+            self.decode=UnpatchifyLinear(patch_size, latent_dim)
+            self.gelu=torch.nn.GELU()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            raise NotImplementedError()
+            #raise NotImplementedError()
+            return self.gelu( self.decode(x) )
 
     def __init__(self, patch_size: int = 25, latent_dim: int = 128, bottleneck: int = 128):
         super().__init__()
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        self.encoder=PatchEncoder(patch_size, latent_dim, bottleneck)
+        self.decoder=PatchDecoder(patch_size, latent_dim, bottleneck)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
@@ -189,10 +218,14 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
         minimize (or even just visualize).
         You can return an empty dictionary if you don't have any additional terms.
         """
+        #raise NotImplementedError()
+        return self.decoder( self.encoder(x) ), []
+        
+
+
+
+    def encode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchEncoder() class instead
         raise NotImplementedError()
 
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError()
-
-    def decode(self, x: torch.Tensor) -> torch.Tensor:
+    def decode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchDecoder() class instead
         raise NotImplementedError()
