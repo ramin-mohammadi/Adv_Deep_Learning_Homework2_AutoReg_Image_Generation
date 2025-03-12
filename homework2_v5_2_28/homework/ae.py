@@ -188,12 +188,15 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
         def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
             super().__init__()
             #raise NotImplementedError()
-            self.encode=PatchifyLinear(patch_size, latent_dim)
-            self.gelu=torch.nn.GELU()
+            self.encode=PatchifyLinear(patch_size, latent_dim) # conv
+            self.gelu=torch.nn.GELU() # non linear layer
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             #raise NotImplementedError()
-            return sefl.gelu( self.encode(x) )
+            # Note, torch conv layer requires channel first format but non linear layers do not require it
+            # Output of encode() is a channel last dimension format (batch x height x width x channel) 
+            # and in PatchifyLinear() changes to channel first format before performing conv layer
+            return sefl.gelu( self.encode(x) ) 
 
     class PatchDecoder(torch.nn.Module):
         def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
