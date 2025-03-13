@@ -19,10 +19,18 @@ def diff_sign(x: torch.Tensor) -> torch.Tensor:
     A differentiable sign function using the straight-through estimator.
     Returns -1 for negative values and 1 for non-negative values.
     """
-    sign = 2 * (x >= 0).float() - 1
-    return x + (sign - x).detach()
+    sign = 2 * (x >= 0).float() - 1 # note: (x >= 0) evals to a bool (1 or 0)
+    return x + (sign - x).detach()  
+    """
+    - so if x was positive, (sign - x) is essentially -x+1 then add +x and get +1
+    - if x was neg, (sign-x) is -1+x then the x+ on left side is basically -x so left with -1
+    - When you perform an operation that doesn't require gradients, you can use .detach() to ensure 
+      that PyTorch doesn't track the gradients of intermediate operations.
+      - .detach() is useful if you only want to use that tensor for computation but don't want to backpropagate through it.
+    """
 
-
+# DONT have to write code for this class. Purpose is to define abstract methods (define params)
+# that classes that inherit this class will have to define
 class Tokenizer(abc.ABC):
     """
     Base class for all tokenizers.
@@ -46,26 +54,37 @@ class Tokenizer(abc.ABC):
 class BSQ(torch.nn.Module):
     def __init__(self, codebook_bits: int, embedding_dim: int):
         super().__init__()
-        raise NotImplementedError()
+        #raise NotImplementedError() 
+        self.linear_down=torch.nn.Linear(embedding_dim, codebook_bits) # A linear down-projection into codebook_bits dimensions
+        #self.l2_norm=torch.nn. -> do NOT use nn.LayerNorm() and do Not use batch norm bc dont want to normalize across batches
+        self.linear_up=torch.nn.Linear(codebook_bits, embedding_dim)
+        
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """
         Implement the BSQ encoder:
         - A linear down-projection into codebook_bits dimensions
-        - L2 normalization
+        - L2 normalization  
+            - Notes regarding normalization
+                - do not use nn.LayerNorm() nor BatchNorm() bc these normalize across batches
+                - after linear down proj, dimension of input is now (batch x height x width x channels) where channels=codebook_bits
+                - will want to normalize in the codebook_bits dimension so -1 dimension (last dimension) (want to norm across the tokens on per image basis not across the batch) 
         - differentiable sign
         """
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        return diff_sign(torch.nn.functional.normalize(self.linear_down(x), p=2.0, dim=-1)) # the normalize() funct calcs L_p norm where p=2 by default
+       
 
     def decode(self, x: torch.Tensor) -> torch.Tensor:
         """
         Implement the BSQ decoder:
         - A linear up-projection into embedding_dim should suffice
         """
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        return self.linear_up(x) # notice we're not doing normalization then linear up proj as done in paper
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.decode(self.encode(x))
+        return self.decode(self.encode(x)) # self.encode() and self.decode() calls the def encode() and def decode() in this class
 
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -96,20 +115,26 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
     """
 
     def __init__(self, patch_size: int = 5, latent_dim: int = 128, codebook_bits: int = 10):
-        super().__init__(patch_size=patch_size, latent_dim=latent_dim)
-        raise NotImplementedError()
+        super().__init__(patch_size=patch_size, latent_dim=latent_dim) # call PatchAutoEncoder()'s init() funct which creates self.encoder and self.decoder
+        #raise NotImplementedError()
+        self.bsq=BSQ(codebook_bits, latent_dim)
+        
 
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        return self.BSQ.encode_index(x)
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        return self.BSQ.decode_index(x)
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        return super().encode(x) # calls PatchAutoEncoder's encode() method
 
     def decode(self, x: torch.Tensor) -> torch.Tensor:
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        return super().decode(x)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
@@ -127,4 +152,21 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
                 ...
               }
         """
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        
+        """
+        NOTE: 
+            - bc encode() will return output of dimension hwc (channel last), this dim will 
+              be fed into bsq and bc not working with conv layers we dont worry about doing the hwc_to_chw(). Then 
+              call PatchAutoEncoder's decoder which expects hwc dim format so this pipeline works (regarding dimensions)
+            - also note, true dimension of input is batch x h x w x c
+        """
+        
+        # Encode using PatchAutoEncoder's encode method 
+        x=encode(x)
+        
+        # BSQ, perform linear down projection, normalization, binary quantize, then linear up projection
+        x=self.bsq(x)
+        
+        # finally decode using PatchAutoEncoder's decode method 
+        return decode(x)

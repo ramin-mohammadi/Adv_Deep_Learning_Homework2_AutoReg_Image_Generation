@@ -53,6 +53,8 @@ class PatchifyLinear(torch.nn.Module):
         return: (B, H//patch_size, W//patch_size, latent_dim) a patchified embedding tensor
         """
         return chw_to_hwc(self.patch_conv(hwc_to_chw(x)))
+        # IMPORTANT TO NOTE: only have to make sure dimension is chw for convolutional layers
+        # Then we put back into hwc so future operations can be performed quicker
 
 """
 Convolution Notes:
@@ -142,6 +144,8 @@ class UnpatchifyLinear(torch.nn.Module):
         return: (B, H * patch_size, W * patch_size, 3) a image tensor
         """
         return chw_to_hwc(self.unpatch_conv(hwc_to_chw(x)))
+        # IMPORTANT TO NOTE: only have to make sure dimension is chw for convolutional layers
+        # Then we put back into hwc so future operations can be performed quicker
 
 """
  - PatchAutoEncoder inherits this class
@@ -188,32 +192,46 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
         def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
             super().__init__()
             #raise NotImplementedError()
-            self.encode=PatchifyLinear(patch_size, latent_dim) # conv
+            self.encode_layer=PatchifyLinear(patch_size, latent_dim) # conv
             self.gelu=torch.nn.GELU() # non linear layer
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             #raise NotImplementedError()
+            
             # Note, torch conv layer requires channel first format but non linear layers do not require it
             # Output of encode() is a channel last dimension format (batch x height x width x channel) 
             # and in PatchifyLinear() changes to channel first format before performing conv layer
-            return sefl.gelu( self.encode(x) ) 
+            return self.gelu( self.encode_layer(x) ) 
+            # IMPORTANT TO NOTE: only have to make sure dimension is chw for convolutional layers
+            # So activation functions (non linear) do NOT require to put dim in chw form
+            # so here we return a hwc (channel last) form
 
     class PatchDecoder(torch.nn.Module):
         def __init__(self, patch_size: int, latent_dim: int, bottleneck: int):
             super().__init__()
             #raise NotImplementedError()
-            self.decode=UnpatchifyLinear(patch_size, latent_dim)
+            self.decode_layer=UnpatchifyLinear(patch_size, latent_dim)
             self.gelu=torch.nn.GELU()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             #raise NotImplementedError()
-            return self.gelu( self.decode(x) )
+            
+            # For decoder, non linear first, then conv
+            return self.decode_layer( self.gelu(x) ) 
 
     def __init__(self, patch_size: int = 25, latent_dim: int = 128, bottleneck: int = 128):
         super().__init__()
         #raise NotImplementedError()
         self.encoder=PatchEncoder(patch_size, latent_dim, bottleneck)
         self.decoder=PatchDecoder(patch_size, latent_dim, bottleneck)
+        
+    def encode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchEncoder() class instead
+        #raise NotImplementedError()
+        return self.encoder(x)
+
+    def decode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchDecoder() class instead
+        #raise NotImplementedError()
+        return self.decoder(x)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """
@@ -222,13 +240,4 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
         You can return an empty dictionary if you don't have any additional terms.
         """
         #raise NotImplementedError()
-        return self.decoder( self.encoder(x) ), []
-        
-
-
-
-    def encode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchEncoder() class instead
-        raise NotImplementedError()
-
-    def decode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchDecoder() class instead
-        raise NotImplementedError()
+        return decode( encode(x) ), []
