@@ -56,7 +56,7 @@ class BSQ(torch.nn.Module):
         super().__init__()
         #raise NotImplementedError() 
         self.linear_down=torch.nn.Linear(embedding_dim, codebook_bits) # A linear down-projection into codebook_bits dimensions
-        #self.l2_norm=torch.nn. -> do NOT use nn.LayerNorm() and do Not use batch norm bc dont want to normalize across batches
+        ####self.l2_norm=torch.nn. -> do NOT use nn.LayerNorm() and do Not use batch norm bc dont want to normalize across batches
         self.linear_up=torch.nn.Linear(codebook_bits, embedding_dim)
         
 
@@ -72,7 +72,7 @@ class BSQ(torch.nn.Module):
         - differentiable sign
         """
         #raise NotImplementedError()
-        return diff_sign(torch.nn.functional.normalize(self.linear_down(x), p=2.0, dim=-1)) # the normalize() funct calcs L_p norm where p=2 by default
+        return diff_sign(torch.nn.functional.normalize(self.linear_down(x), p=2.0, dim=-1)) # the normalize() funct calcs L_p norm where p=2 by default and we normalize on the codebook_bits dimension (batch x h x w x channel) where channel is codebook_bits size
        
 
     def decode(self, x: torch.Tensor) -> torch.Tensor:
@@ -160,6 +160,9 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
               be fed into bsq and bc not working with conv layers we dont worry about doing the hwc_to_chw(). Then 
               call PatchAutoEncoder's decoder which expects hwc dim format so this pipeline works (regarding dimensions)
             - also note, true dimension of input is batch x h x w x c
+            - IMPORTANT to NOTE: 
+                - Encode_index and decode_index are only used for autoregressive generation (so not BSQ). Do not use them in training. 
+                - This is why in BSQ's forward() we call BSQ's encode and decode methods rather encode_index and decode_index
         """
         
         # Encode using PatchAutoEncoder's encode method 
