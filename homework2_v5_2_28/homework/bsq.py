@@ -55,6 +55,7 @@ class BSQ(torch.nn.Module):
     def __init__(self, codebook_bits: int, embedding_dim: int):
         super().__init__()
         #raise NotImplementedError() 
+        self._codebook_bits=codebook_bits # used by _index_to_code()
         self.linear_down=torch.nn.Linear(embedding_dim, codebook_bits) # A linear down-projection into codebook_bits dimensions
         ####self.l2_norm=torch.nn. -> do NOT use nn.LayerNorm() and do Not use batch norm bc dont want to normalize across batches
         self.linear_up=torch.nn.Linear(codebook_bits, embedding_dim)
@@ -106,6 +107,7 @@ class BSQ(torch.nn.Module):
         return 2 * ((x[..., None] & (2 ** torch.arange(self._codebook_bits).to(x.device))) > 0).float() - 1
 
 
+
 class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
     """
     Combine your PatchAutoEncoder with BSQ to form a Tokenizer.
@@ -122,11 +124,11 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
 
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
         #raise NotImplementedError()
-        return self.BSQ.encode_index(x)
+        return self.bsq.encode_index(super().encode(x))
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
         #raise NotImplementedError()
-        return self.BSQ.decode_index(x)
+        return super().decode(self.bsq.decode_index(x))
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         #raise NotImplementedError()

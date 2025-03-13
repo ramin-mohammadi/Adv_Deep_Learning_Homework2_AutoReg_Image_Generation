@@ -75,10 +75,10 @@ Convolution Notes:
     - stride for Conv2d() meant how much we want to downsample, but stride for ConvTranspose2D() means how much we want to upsample
     - padding for ConvTranspose2d() will cut things from the output so padding of 0 will make output larger and padding 1 will cut and shrink the output
 
-- Output size (height x width) after conv layer = ((Input size−Kernel size + 2*Padding)/Stride) +1
+- Output size (height x width) after conv layer = ((Input size-Kernel size + 2*Padding)/Stride) +1
 - Remember, channel after conv layer determined by out_channels parameter in Conv2d()
 
-- Output Size after convTRANSPOSE layer =(S*(I−1)+K−2P+O)  , S=Stride, I=InputSize, K=KernelSize, P=Padding, O=OutputPadding
+- Output Size after convTRANSPOSE layer =(S*(I-1)+K-2P+O)  , S=Stride, I=InputSize, K=KernelSize, P=Padding, O=OutputPadding
 """
 
 """
@@ -96,7 +96,7 @@ Understanding Convolution being done:
         - increase channels from 3 -> latent_dim=128
         - the patch_size=25 params correspond to kernel_size and stride
         - kernel_size corresponds to window size during conv operation (25x25)
-        - stide is how many pixels we're skipping as we perform conv operation on kernel window
+        - stride is how many pixels we're skipping as we perform conv operation on kernel window
             - bc stride=25 and kernel_size=25, we're practically only performing conv operation on "patches" of an image
             - ex: think of a 50x50 image (height x width), by having stride=25 and kernel_size=25, we have 4 patches/quadrants of the image that we convolute on
         - outputsize after single one of these conv layers
@@ -117,7 +117,7 @@ Understanding Convolution being done:
             - input is (batch x 128 x 6 x 4) (batch x channel x height x width) 
             - channel reduced: 128 -> 3
             - the patch_size params correspond to kernel_size and stride
-            - new_height=(S*(I−1)+K−2P+O) = (25*(6-1)+25-(2*0)+0) = 150
+            - new_height=(S*(I-1)+K-2P+O) = (25*(6-1)+25-(2*0)+0) = 150
             - new_width=(25*(4-1)+25-(2*0)+0) = 100
             - so we end up with original dimension: batch x 3 x 150 x 100
         - again in forward() after perform conv layer, put back into channel last (hxwxc)
@@ -194,6 +194,8 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             #raise NotImplementedError()
             self.encode_layer=PatchifyLinear(patch_size, latent_dim) # conv
             self.gelu=torch.nn.GELU() # non linear layer
+            self.conv=torch.nn.Conv2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            self.gelu2=torch.nn.GELU()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             #raise NotImplementedError()
@@ -201,7 +203,15 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             # Note, torch conv layer requires channel first format but non linear layers do not require it
             # Output of encode() is a channel last dimension format (batch x height x width x channel) 
             # and in PatchifyLinear() changes to channel first format before performing conv layer
-            return self.gelu( self.encode_layer(x) ) 
+
+            # implementation for PatchAutoEncoder.pth
+            #return self.gelu( self.encode_layer(x) ) 
+            
+            # -> implementation for BSQ (adding extra conv improved but pick good kernel size -> kernel_size and stride=patch_size was bad)
+            #return self.gelu2( chw_to_hwc(self.conv( hwc_to_chw(self.gelu( self.encode_layer(x) ) ) )) ) -> was not better for BSQ
+            return chw_to_hwc(self.conv( hwc_to_chw(self.gelu( self.encode_layer(x) ) ) )) 
+
+            
             # IMPORTANT TO NOTE: only have to make sure dimension is chw for convolutional layers
             # So activation functions (non linear) do NOT require to put dim in chw form
             # so here we return a hwc (channel last) form
@@ -212,12 +222,19 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             #raise NotImplementedError()
             self.decode_layer=UnpatchifyLinear(patch_size, latent_dim)
             self.gelu=torch.nn.GELU()
+            self.conv_transpose=torch.nn.ConvTranspose2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            self.gelu2=torch.nn.GELU()
+   
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             #raise NotImplementedError()
             
             # For decoder, non linear first, then conv
-            return self.decode_layer( self.gelu(x) ) 
+            #return self.decode_layer( self.gelu( x ) )  -> implementation for PatchAutoEncoder.pth
+           # return self.decode_layer( self.gelu( chw_to_hwc(self.conv_transpose( hwc_to_chw(x) ) ) ) ) 
+            return self.decode_layer( self.gelu2(chw_to_hwc(self.conv_transpose( hwc_to_chw(self.gelu( x )) )) ) ) 
+
+
 
     def __init__(self, patch_size: int = 25, latent_dim: int = 128, bottleneck: int = 128):
         super().__init__()
