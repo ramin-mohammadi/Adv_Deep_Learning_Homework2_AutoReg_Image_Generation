@@ -222,8 +222,8 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
     def __init__(self, patch_size: int = 25, latent_dim: int = 128, bottleneck: int = 128):
         super().__init__()
         #raise NotImplementedError()
-        self.encoder=PatchEncoder(patch_size, latent_dim, bottleneck)
-        self.decoder=PatchDecoder(patch_size, latent_dim, bottleneck)
+        self.encoder=self.PatchEncoder(patch_size, latent_dim, bottleneck)
+        self.decoder=self.PatchDecoder(patch_size, latent_dim, bottleneck)
         
     def encode(self, x: torch.Tensor) -> torch.Tensor: # I will use the PatchEncoder() class instead
         #raise NotImplementedError()
@@ -240,4 +240,4 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
         You can return an empty dictionary if you don't have any additional terms.
         """
         #raise NotImplementedError()
-        return decode( encode(x) ), []
+        return self.decode( self.encode(x) ), {}

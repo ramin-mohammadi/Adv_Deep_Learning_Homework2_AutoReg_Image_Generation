@@ -166,10 +166,10 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
         """
         
         # Encode using PatchAutoEncoder's encode method 
-        x=encode(x)
+        x=self.encode(x)
         
         # BSQ, perform linear down projection, normalization, binary quantize, then linear up projection
         x=self.bsq(x)
         
         # finally decode using PatchAutoEncoder's decode method 
-        return decode(x)
+        return self.decode(x), {}
