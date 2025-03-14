@@ -57,8 +57,7 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
     def __init__(self, d_latent: int = 128, n_tokens: int = 2**10):
         super().__init__()
         #raise NotImplementedError()
-        
-        
+         
         """
         Transformer layer
         - https://pytorch.org/docs/stable/generated/torch.nn.TransformerEncoderLayer.html
@@ -74,28 +73,48 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         """
         
         # params corresponding to transformer layer
-        num_layers=2
+        num_layers=4
         num_heads=8
-        dim_feedforward=1024 # default was 2048 which is too much , this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
+        dim_feedforward=2048 # default was 2048 which is too much, this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
         dropout=0.1 # 0.1 used in transformer paper
         # norm_first=True: in deeplearning lecture, doing norm first before attention was better but not done in orig transformer paper
         activation="relu" # can change to use gelu
         # we set batch_first=True bc our input's first dimension is batch
         
+        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=True, batch_first=True)
 
-        self.network = torch.nn.Sequential(
-            torch.nn.Embedding(num_embeddings=n_tokens, embedding_dim=d_latent),
-            *[TransformerEncoderLayer(d_model=n_tokens, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=True, batch_first=True) for _ in range(num_layers)],
-            torch.nn.Linear(n_tokens, d_latent),
-            torch.nn.Softmax(dim=-1), # softmax bc want to output probabities
-        )
+        # Model LAYERS
+        self.embed=torch.nn.Embedding(num_embeddings=n_tokens, embedding_dim=d_latent)
+        self.transformer_encoder=torch.nn.TransformerEncoder(encoder_layer, num_layers=num_layers) # NOTE: have to place TransformerEncoderLayer within TransformerEncoder()
+        self.linear=torch.nn.Linear(d_latent, n_tokens)
+        self.softmax=torch.nn.Softmax(dim=-1) # softmax bc want to output probabities
+        
+        """
+        Softmax Example:
+            m = torch.nn.Softmax(dim=-1)
+            input = torch.randn(2, 3, 3)
+            output = m(input)
+            print(output)
+            
+            tensor([[[0.5209, 0.4005, 0.0786],
+             [0.2409, 0.1279, 0.6313],
+             [0.3267, 0.0560, 0.6173]],
+
+            [[0.1546, 0.7600, 0.0854],
+             [0.4108, 0.5040, 0.0852],
+             [0.4260, 0.4499, 0.1240]]])
+             -> can see with dim=-1, we get intended effect of the last dimension (across columns) sum to 1
+        """
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         #raise NotImplementedError()
-        
-        # NOTE: input is size (Batch x height x width) and are the compressed tokenized version of images generated from our BSQ model
+        """
+        Input
+        # NOTE: input is size (Batch x height x width x 3) and are the compressed tokenized version of images generated from output of our BSQ model
         # -> output of BSQ model is the output of last layer being the decoder from autoencoder model being UnpatchifyLinear(): (B, H * patch_size, W * patch_size, 3)
         # -> note UnpatchifyLinear() returns the original image so (Batch x Original Height x Original Width x 3 Color Channels)
+        """
+        
         """
         Mask
         - mask we're using (already made mask): 
@@ -109,16 +128,48 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
                     [0., 0., 0., -inf, -inf],
                     [0., 0., 0., 0., -inf],
                     [0., 0., 0., 0., 0.]])
+                    
+        Shift over by 1: 
+        - notice the above tensor is not fully correct bc we dont want the current location to attend to itself 
+         (at location i, should not be able to attend j=i, rows are i and columns are j)
+        - use ConstantPad1D and slicing
+            sz=5
+            m = torch.nn.Transformer.generate_square_subsequent_mask(sz)
+            print(m)
+            pad = torch.nn.ConstantPad1d((0, 1), float('-inf')) # 2nd param corresponds to what value to add, tuple in first param corresponds to how many of the value to add to the left and right
+            print(pad(m)[:, 1:])
+            
+            tensor([[0., -inf, -inf, -inf, -inf],
+                    [0., 0., -inf, -inf, -inf],
+                    [0., 0., 0., -inf, -inf],
+                    [0., 0., 0., 0., -inf],
+                    [0., 0., 0., 0., 0.]])
+            tensor([[-inf, -inf, -inf, -inf, -inf],    -> "Shifting done by adding a -inf to right side then only including columns starting from index 1"
+                    [0., -inf, -inf, -inf, -inf],
+                    [0., 0., -inf, -inf, -inf],
+                    [0., 0., 0., -inf, -inf],
+                    [0., 0., 0., 0., -inf]])
         """
-        sz=x.shape[1] * x.shape[2] # height * width is the number of tokens or sequenceLength bc this is the total num of pixels in an image
+        sz=x.shape[1] * x.shape[2] * x.shape[3]# height * width is the number of tokens or sequenceLength bc this is the total num of pixels in an image
         mask=torch.nn.Transformer.generate_square_subsequent_mask(sz=sz) 
+        pad=torch.nn.ConstantPad1d((0, 1), float('-inf'))
+        mask=pad(mask)[:, 1:]
         
         """
-        - The shape of the input before flattening is shape of x torch.Size([2560, 100, 150, 3])
+        Flatten
+        - The shape of the input before flattening is shape of x torch.Size([2560, 100, 150, 3]) -> 2560 corresponds to batch_size
         - The shape of the input after flattening is shape of x torch.Size([2560, 45000])
         """
-        x=torch.flatten(x)
-    
+        x=torch.flatten(x, start_dim=1) # start_dim=1 bc dont want to flatten the batch dimension so start flattening at dim 1
+        
+        """
+        Pass through model
+        """
+        x=self.embed(x)
+        x=self.transformer_encoder(x, mask=mask, is_causal=True) # set is_causal to true bc the mask we're using is causal meaning mask that prevents from looking at future tokens
+        x=self.linear(x)
+        return self.softmax(x)
+        
     # This is for part 4 (the generate part of the assignment)
     def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None) -> torch.Tensor:  # noqa
         raise NotImplementedError()
