@@ -11,6 +11,29 @@ def load() -> torch.nn.Module:
     print(f"Loading {model_name} from {model_path}")
     return torch.load(model_path, weights_only=False)
 
+import math
+def sinusoidal_positional_encoding(seq_len, d_model):
+    
+    """
+    Generate sinusoidal positional encodings for the input sequence.
+
+    :param seq_len: Length of the input sequence (number of tokens).
+    :param d_model: Dimensionality of the model (size of the embedding).
+    :return: Tensor of shape (seq_len, d_model) with positional encodings.
+    """
+    # Create a matrix of shape (seq_len, d_model)
+    pe = torch.zeros(seq_len, d_model)
+    
+    # Position indices (i) and dimension indices (2 * k)
+    position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)  # Shape: (seq_len, 1)
+    div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))  # Shape: (d_model // 2)
+
+    # Calculate sine and cosine for each position and each dimension
+    pe[:, 0::2] = torch.sin(position * div_term)  # Apply sin to even indices (2k)
+    pe[:, 1::2] = torch.cos(position * div_term)  # Apply cos to odd indices (2k + 1)
+    
+    return pe
+
 
 # Dont have to write code in here, these are just abstract methods
 class Autoregressive(abc.ABC):
@@ -73,19 +96,30 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         """
         
         # params corresponding to transformer layer
-        num_layers=4
+        num_layers=6
         num_heads=8
         dim_feedforward=2048 # default was 2048 which is too much, this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
         dropout=0.1 # 0.1 used in transformer paper
         # norm_first=True: in deeplearning lecture, doing norm first before attention was better but not done in orig transformer paper
-        activation="relu" # can change to use gelu
+        #activation="relu" # can change to use gelu
         # we set batch_first=True bc our input's first dimension is batch
         
-        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=True, batch_first=True)
+        """
+        Fine tuning Transformer params
+        - num_layers=4, dim_feedforward=2048 was bad / slowly improved
+        - Best so far: num_layyers=2, dim_feedforward=512
+        - Best so far: num_layyers=1, dim_feedforward=512
+        """
+        
+        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=True, batch_first=True, activation='relu')
 
         # Model LAYERS
         self.embed=torch.nn.Embedding(num_embeddings=n_tokens, embedding_dim=d_latent)
         self.transformer_encoder=torch.nn.TransformerEncoder(encoder_layer, num_layers=num_layers) # NOTE: have to place TransformerEncoderLayer within TransformerEncoder()
+        
+        #self.relu=torch.nn.ReLU()
+        self.layer_norm=torch.nn.LayerNorm(n_tokens)
+        
         self.linear=torch.nn.Linear(d_latent, n_tokens)
         self.softmax=torch.nn.Softmax(dim=-1) # softmax bc want to output probabities
         
@@ -105,15 +139,27 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
              [0.4260, 0.4499, 0.1240]]])
              -> can see with dim=-1, we get intended effect of the last dimension (across columns) sum to 1
         """
-
+        
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         #raise NotImplementedError()
+        
+        
+        # CANNOT train autoregressive model on CPU, way too slow, use collab gpu
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            print("CUDA not available, using CPU")
+            device = torch.device("cpu")
+        
         """
         Input
-        # NOTE: input is size (Batch x height x width x 3) and are the compressed tokenized version of images generated from output of our BSQ model
+        # NOTE: input is size (Batch x height x width) and are the compressed tokenized version of images generated from output of our BSQ model
         # -> output of BSQ model is the output of last layer being the decoder from autoencoder model being UnpatchifyLinear(): (B, H * patch_size, W * patch_size, 3)
         # -> note UnpatchifyLinear() returns the original image so (Batch x Original Height x Original Width x 3 Color Channels)
-        """
+        # -> but for some reason input is (Batch x Height x Width)?
+        # -> if print out values of input x, can see it is integers this is bc they are the tokenized version of our images done by our bsq model
+        """        
+        #print(x.shape) #torch.Size([64, 20, 30])
         
         """
         Mask
@@ -150,25 +196,72 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
                     [0., 0., 0., -inf, -inf],
                     [0., 0., 0., 0., -inf]])
         """
-        sz=x.shape[1] * x.shape[2] * x.shape[3]# height * width is the number of tokens or sequenceLength bc this is the total num of pixels in an image
-        mask=torch.nn.Transformer.generate_square_subsequent_mask(sz=sz) 
-        pad=torch.nn.ConstantPad1d((0, 1), float('-inf'))
-        mask=pad(mask)[:, 1:]
+        # pad=torch.nn.ConstantPad1d((1, 0), float(0))
+        sequence_len=x.shape[1] * x.shape[2] # height * width is the number of tokens or sequenceLength bc this is the total num of pixels in an image
+        mask=torch.nn.Transformer.generate_square_subsequent_mask(sz=sequence_len).to(device) 
+        #pad=torch.nn.ConstantPad1d((0, 1), float('-inf'))
+        #mask=(pad(mask)[:, 1:]).to(device) # interacting with model which is on gpu so place on gpu
+        #print(mask)
         
         """
         Flatten
-        - The shape of the input before flattening is shape of x torch.Size([2560, 100, 150, 3]) -> 2560 corresponds to batch_size
-        - The shape of the input after flattening is shape of x torch.Size([2560, 45000])
+        - The shape of the input before flattening is shape of x torch.Size([64, 20, 30]) -> 64 corresponds to batch_size
+        - The shape of the input after flattening is shape of x torch.Size([64, 600])
         """
         x=torch.flatten(x, start_dim=1) # start_dim=1 bc dont want to flatten the batch dimension so start flattening at dim 1
+        #print(x.shape) # torch.Size([64, 600])
         
         """
         Pass through model
         """
-        x=self.embed(x)
+        #print(x)
+        x=self.embed(x) 
+        #print(x.shape) # torch.Size([64, 600, 128])
+        
+        
+        # positional_encoding = sinusoidal_positional_encoding(seq_len=sequence_len, d_model=x.shape[2])[:sequence_len, :].unsqueeze(0).to(device)
+        # x=x+positional_encoding
+        
+        """
+        Shift on output of embedding
+        Ex:
+        shifted_x = torch.roll(input, shifts=1, dims=-1)  # Shift left by 1
+        print(shifted_x)
+        shifted_x[:,:,0]=0
+        print(shifted_x)
+        
+        tensor([[[ 1.9148, -0.1426, -0.3177],
+                [-0.5510,  0.2510, -0.0982],
+                [-1.3463,  1.8922, -0.8155]],
+
+                [[-0.4588, -0.6706,  0.4162],
+                [ 0.0731, -1.3510,  1.8573],
+                [-0.9159, -1.6018,  0.1288]]])
+        tensor([[[ 0.0000, -0.1426, -0.3177],
+                [ 0.0000,  0.2510, -0.0982],
+                [ 0.0000,  1.8922, -0.8155]],
+
+                [[ 0.0000, -0.6706,  0.4162],
+                [ 0.0000, -1.3510,  1.8573],
+                [ 0.0000, -1.6018,  0.1288]]])
+        """
+        x=torch.roll(x, shifts=1, dims=-1)
+        x[:,:,0]=0 # do not make this float("-inf") bc loss becomes nan
+ 
+       
         x=self.transformer_encoder(x, mask=mask, is_causal=True) # set is_causal to true bc the mask we're using is causal meaning mask that prevents from looking at future tokens
+        #print(x.shape) # torch.Size([64, 600, 128])
+        
         x=self.linear(x)
-        return self.softmax(x)
+        #print(x.shape) # torch.Size([64, 600, 1024])
+        
+        #x=self.relu(x)
+        x=self.layer_norm(x)
+        x=self.softmax(x)
+        #print(x) 
+        #print(x.shape) # torch.Size([64, 600, 1024])
+        #print(x.sum(dim=-1))
+        return x, {}
         
     # This is for part 4 (the generate part of the assignment)
     def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None) -> torch.Tensor:  # noqa
