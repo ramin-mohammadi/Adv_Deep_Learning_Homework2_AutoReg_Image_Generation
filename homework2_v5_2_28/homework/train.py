@@ -100,7 +100,7 @@ def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 64):
             return loss
 
         def configure_optimizers(self):
-            return torch.optim.AdamW(self.parameters(), lr=1e-3)
+            return torch.optim.AdamW(self.parameters(), lr=6e-3)
 
         def train_dataloader(self):
             dataset = TokenDataset("train")
