@@ -383,3 +383,6 @@ torch.Size([2560, 100, 150, 3])
 	- Autoregressive prediction loss [ 15 / 15 ]
 	- Check autoregressiveness of the model [ 15 / 15 ]
 	-> 30/30 for auto reg
+	-> Trained on google collab T4 GPU (cannot train on cpu as it is incredibly slow). With above model setup, one epoch is about 7 minutes.
+	-> train.py is using lightning module so train/val data and model is moved onto gpu automatically if one is available.
+	-> so in autoregressive.py just have to move new variables created interacting with the model onto gpu just being the mask (input x in forward() is the train and val data so it's already on gpu)
