@@ -125,10 +125,12 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
     def encode_index(self, x: torch.Tensor) -> torch.Tensor:
         #raise NotImplementedError()
         return self.bsq.encode_index(super().encode(x))
+        #return self.bsq.encode(super().encode(x))
 
     def decode_index(self, x: torch.Tensor) -> torch.Tensor:
         #raise NotImplementedError()
         return super().decode(self.bsq.decode_index(x))
+        #return super().decode(self.bsq.decode(x))
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         #raise NotImplementedError()
@@ -168,10 +170,12 @@ class BSQPatchAutoEncoder(PatchAutoEncoder, Tokenizer):
         """
         
         # Encode using PatchAutoEncoder's encode method 
-        x=self.encode(x)
+        #x=self.encode(x)
+        x=super().encode(x)
         
         # BSQ, perform linear down projection, normalization, binary quantize, then linear up projection
         x=self.bsq(x)
         
         # finally decode using PatchAutoEncoder's decode method 
-        return self.decode(x), {}
+        #return self.decode(x), {}
+        return super().decode(x), {}

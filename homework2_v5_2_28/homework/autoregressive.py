@@ -34,6 +34,14 @@ def sinusoidal_positional_encoding(seq_len, d_model):
     
     return pe
 
+def get_positional_encoding(seq_len, d_model):
+    position = torch.arange(seq_len).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
+    pos_enc = torch.zeros(seq_len, d_model)
+    pos_enc[:, 0::2] = torch.sin(position * div_term)
+    pos_enc[:, 1::2] = torch.cos(position * div_term)
+    return pos_enc
+
 
 # Dont have to write code in here, these are just abstract methods
 class Autoregressive(abc.ABC):
@@ -77,7 +85,7 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
     Hint: You can complete this homework without using positional embeddings
     """
 
-    def __init__(self, d_latent: int = 128, n_tokens: int = 2**10):
+    def __init__(self, d_latent: int = 256, n_tokens: int = 2**10):
         super().__init__()
         #raise NotImplementedError()
          
@@ -96,9 +104,9 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         """
         
         # params corresponding to transformer layer
-        num_layers=6
+        num_layers=5
         num_heads=8
-        dim_feedforward=2048 # default was 2048 which is too much, this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
+        dim_feedforward=1024 # default was 2048 which is too much, this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
         dropout=0.1 # 0.1 used in transformer paper
         # norm_first=True: in deeplearning lecture, doing norm first before attention was better but not done in orig transformer paper
         #activation="relu" # can change to use gelu
@@ -111,14 +119,14 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         - Best so far: num_layyers=1, dim_feedforward=512
         """
         
-        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=True, batch_first=True, activation='relu')
+        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=False, batch_first=True, activation='relu')
 
         # Model LAYERS
         self.embed=torch.nn.Embedding(num_embeddings=n_tokens, embedding_dim=d_latent)
         self.transformer_encoder=torch.nn.TransformerEncoder(encoder_layer, num_layers=num_layers) # NOTE: have to place TransformerEncoderLayer within TransformerEncoder()
         
         #self.relu=torch.nn.ReLU()
-        self.layer_norm=torch.nn.LayerNorm(n_tokens)
+        #self.layer_norm=torch.nn.LayerNorm(n_tokens)
         
         self.linear=torch.nn.Linear(d_latent, n_tokens)
         self.softmax=torch.nn.Softmax(dim=-1) # softmax bc want to output probabities
@@ -150,6 +158,7 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         else:
             print("CUDA not available, using CPU")
             device = torch.device("cpu")
+            
         
         """
         Input
@@ -208,19 +217,24 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         - The shape of the input before flattening is shape of x torch.Size([64, 20, 30]) -> 64 corresponds to batch_size
         - The shape of the input after flattening is shape of x torch.Size([64, 600])
         """
-        x=torch.flatten(x, start_dim=1) # start_dim=1 bc dont want to flatten the batch dimension so start flattening at dim 1
+        x=torch.flatten(x, start_dim=1).to(device) # start_dim=1 bc dont want to flatten the batch dimension so start flattening at dim 1
         #print(x.shape) # torch.Size([64, 600])
         
         """
         Pass through model
         """
         #print(x)
+        
+        
         x=self.embed(x) 
         #print(x.shape) # torch.Size([64, 600, 128])
         
         
         # positional_encoding = sinusoidal_positional_encoding(seq_len=sequence_len, d_model=x.shape[2])[:sequence_len, :].unsqueeze(0).to(device)
         # x=x+positional_encoding
+        
+        positional_encoding = get_positional_encoding(seq_len=sequence_len, d_model=x.shape[2])
+        x = x + positional_encoding.to(device)
         
         """
         Shift on output of embedding
@@ -245,10 +259,12 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
                 [ 0.0000, -1.3510,  1.8573],
                 [ 0.0000, -1.6018,  0.1288]]])
         """
-        x=torch.roll(x, shifts=1, dims=-1)
+        x=torch.roll(x, shifts=1, dims=-1) # dims=-1
         x[:,:,0]=0 # do not make this float("-inf") bc loss becomes nan
+        #x[:,0]=0
  
-       
+      
+        
         x=self.transformer_encoder(x, mask=mask, is_causal=True) # set is_causal to true bc the mask we're using is causal meaning mask that prevents from looking at future tokens
         #print(x.shape) # torch.Size([64, 600, 128])
         
@@ -256,7 +272,7 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         #print(x.shape) # torch.Size([64, 600, 1024])
         
         #x=self.relu(x)
-        x=self.layer_norm(x)
+        #x=self.layer_norm(x)
         x=self.softmax(x)
         #print(x) 
         #print(x.shape) # torch.Size([64, 600, 1024])

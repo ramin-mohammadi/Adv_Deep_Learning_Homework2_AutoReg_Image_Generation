@@ -194,7 +194,8 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             #raise NotImplementedError()
             self.encode_layer=PatchifyLinear(patch_size, latent_dim) # conv
             self.gelu=torch.nn.GELU() # non linear layer
-            self.conv=torch.nn.Conv2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            #self.conv=torch.nn.Conv2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            self.conv=torch.nn.Conv2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=3, stride=1, padding=1, bias=False)
             self.gelu2=torch.nn.GELU()
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -209,8 +210,11 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             
             # -> implementation for BSQ (adding extra conv improved but pick good kernel size -> kernel_size and stride=patch_size was bad)
             #return self.gelu2( chw_to_hwc(self.conv( hwc_to_chw(self.gelu( self.encode_layer(x) ) ) )) ) -> was not better for BSQ
-            return chw_to_hwc(self.conv( hwc_to_chw(self.gelu( self.encode_layer(x) ) ) )) 
-
+            #return chw_to_hwc(self.conv( hwc_to_chw(self.gelu( self.encode_layer(x) ) ) )) -> MOST RECENT
+            # res= self.gelu(chw_to_hwc(self.conv( hwc_to_chw( self.encode_layer(x)  ) ))  )
+            # print(res.shape)
+            # return res
+            return self.gelu( chw_to_hwc( self.conv( hwc_to_chw( self.encode_layer(x) ) ) ) )
             
             # IMPORTANT TO NOTE: only have to make sure dimension is chw for convolutional layers
             # So activation functions (non linear) do NOT require to put dim in chw form
@@ -222,7 +226,8 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             #raise NotImplementedError()
             self.decode_layer=UnpatchifyLinear(patch_size, latent_dim)
             self.gelu=torch.nn.GELU()
-            self.conv_transpose=torch.nn.ConvTranspose2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            # self.conv_transpose=torch.nn.ConvTranspose2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=1, stride=1, padding=0, bias=False)
+            self.conv_transpose=torch.nn.ConvTranspose2d(in_channels=latent_dim, out_channels=latent_dim, kernel_size=3, stride=1, padding=1, bias=False)
             self.gelu2=torch.nn.GELU()
    
 
@@ -231,9 +236,11 @@ class PatchAutoEncoder(torch.nn.Module, PatchAutoEncoderBase):
             
             # For decoder, non linear first, then conv
             #return self.decode_layer( self.gelu( x ) )  -> implementation for PatchAutoEncoder.pth
-           # return self.decode_layer( self.gelu( chw_to_hwc(self.conv_transpose( hwc_to_chw(x) ) ) ) ) 
-            return self.decode_layer( self.gelu2(chw_to_hwc(self.conv_transpose( hwc_to_chw(self.gelu( x )) )) ) ) 
-
+            # res=self.decode_layer( self.gelu( chw_to_hwc(self.conv_transpose( hwc_to_chw(x) ) ) ) )
+            # print(res.shape)
+            # return res
+            #return self.decode_layer( self.gelu2(chw_to_hwc(self.conv_transpose( hwc_to_chw(self.gelu( x )) )) ) ) -> MOST RECENT
+            return self.decode_layer( self.gelu( chw_to_hwc( self.conv_transpose( hwc_to_chw(x) ) ) ) )
 
 
     def __init__(self, patch_size: int = 25, latent_dim: int = 128, bottleneck: int = 128):
