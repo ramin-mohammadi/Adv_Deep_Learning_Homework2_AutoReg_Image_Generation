@@ -209,6 +209,8 @@ Once you finished the assignment, create a submission bundle using:
 
 ```bash
 python3 bundle.py homework [YOUR UT ID]
+
+python bundle.py homework rm59549
 ```
 
 Submit the zip file on Canvas. Please note that the maximum file size our grader accepts is **20MB**. Please keep your solution compact.
@@ -248,3 +250,136 @@ Then install additional dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
+
+## TA Tips
+1/ PAE:
+- forward() only has encode() and decode()
+- if you have gelu as the last layer of decode, remove it.
+- use at least 1 conv and gelu for encode (patchify -> conv -> gelu) and decode (conv -> gelu -> unpatchify). Remember to use chw_to_hwc <-> hwc_to_chw properly.
+- when you have additional conv and gelu layers, the PAE performance will reduce, hence setting patch_size = 5 when re-running the PAE model.
+
+2/ BSQ:
+- bsqpae.forward() has only encode and decode.
+- the bsqpae.encode/decode are used for training, while bsqpae.encode_index/decode_index are used for grading. They have similar structure. If the training loss is good but validation loss (grader) is not good, the problem is that you don’t have similar structure for them.
+-  check the paper to understand the model architecture more. The encode in the paper is the pae.encode() or super().encode.
+- shouldn’t flatten the input
+- shouldn’t use shape conversion (chw <-> hwc).
+
+
+
+
+# My Personal Steps For Running/Training:
+
+- Download Dataset (400MB)
+wget https://utexas.box.com/shared/static/qubjm5isldqvyimfj9rsmbnvnbezwcv4.zip -O supertux_data.zip
+unzip supertux_data.zip
+or just paste link in browser and unzip the file
+
+- follow installation steps above of creating conda env then installing required dependencies by pip installing requirements.txt in the conda env
+- had to end up installing tensorboard: pip install -U tensorboardX
+- open anaconda prompt and make sure you're in the conda env that was created then run the below python commands
+- Important: after unzipping dataset, go into folder and place the "data" folder inside the homework folder (same location as the grader,homework and logs folders)
+	- this is bc in data.py, it expects: DATASET_PATH = Path(__file__).parent.parent / "data" -> so 2 parent folders above location of data.py then in a folder called data
+	- and inside the data folder from zipped file is the train and val folders
+- Want to cd into directory same location as the logs, grader, and homework folders
+
+
+- Training (run these commands from same location as the logs,homework, and grader)
+	- python -m homework.train NameOfTheModel
+	- Open Tensorboard during training: -> not necessary
+		- pip install tensorboard
+		- tensorboard --logdir logs
+	
+- Sequentially complete
+	- Train PatchAutoEncoder
+		- python -m homework.train PatchAutoEncoder
+	- Train BSQPatchAutoEncoder
+		- python -m homework.train BSQPatchAutoEncoder
+	- Generate tokenized training and validation images by feeding through BSQPatchAutoEncoder -> if generate a better BSQ, re-run these commands
+		- python -m homework.tokenize checkpoints/2025-03-13_05-31-18_BSQPatchAutoEncoder.pth data/tokenized_train.pth data/train/    -> had to get rid of the *.jpg bc command prompt doesnt recognize it (bash/regex command)
+		- python -m homework.tokenize checkpoints/2025-03-13_05-31-18_BSQPatchAutoEncoder.pth data/tokenized_valid.pth data/valid/
+		- The original train folder is 500MB and my tokenized_train.pth was around 80MB
+		- I noticed inside of the train and val folders are .json files and bc we previosuly got rid of the *.jpg, we may be using the .json files in the BSQ model messing with auto reg training
+		SOLUTION to the .json files in train and val
+		- conda install m2-base    -> allows us to use unix commands like ls in anaconda prompt and *.jpg works, clear, etc. (all the commands we know)
+		- python -m homework.tokenize checkpoints/2025-03-13_05-31-18_BSQPatchAutoEncoder.pth data/tokenized_train.pth data/train/*.jpg
+		- python -m homework.tokenize checkpoints/2025-03-13_05-31-18_BSQPatchAutoEncoder.pth data/tokenized_valid.pth data/valid/*.jpg
+		-> still getting error, i think its from *.jpg not being an exact directory path to a specific .jpg PIL's Image.open() cant interpret *.jpg
+		-> so manually remove .json files:
+		- rm data/train/*.json
+		- rm data/valid/*.json
+		- ls data/train/*.json | wc -l    -> count num of .json files in path
+		see if only .jpg files left in train and valid (see if they have same count):
+		ls data/train/* | wc -l
+		ls data/train/*.jpg | wc -l
+	- Train AutoRegressive model using the generated tokenized images
+		- python -m homework.train AutoregressiveModel
+			- NOTE: The cross-entropy (loss used for AutoReg training -> look in train.py) corresponds to the compression rate an arithmetic coding algorithm can obtain using your model.
+			- Your model should be able to reach an average of 4500 bits per image quite easily. -> loss
+
+	
+- Test using local Grader
+	- LOCAL GRADER: python -m grader homework -vv
+	- python bundle.py homework rm59549 -> bundle into .zip
+	- python -m grader rm59549.zip -> do not use this for local grading
+	
+	
+	
+## Results , Remeber a too complicated network (too many layers) increases likely that network dies off 
+- PatchAutoEncoder 
+	- OLD: 30/30, trained for defualt epochs being 5: Validation loss: 0.0022978780325502157 -> AdamW lr=1e-3 and in ae.py, PatchEncode forward was return self.gelu( self.encode_layer(x) )  and PatchDecode was return self.decode_layer( self.gelu( x ) )
+		- this was without the extra conv layers but these are needed for bsq
+	- 30/30 -> PAE for BEST BSQPAE train/loss=0.00327, validation/loss=0.00357 -> lr=1e-3, 2 epochs
+		- PAE used for best BSQPAE results had overfitting at 5 epochs (loss went up to 0.06) so instead trained for 2 epochs:
+		- python -m homework.train PatchAutoEncoder --epochs 2
+- BSQPatchAutoEncoder: 
+	- OLD: 28/30, 5 epochs training (10 epochs lead to overfitting), Val loss: 0.005297622177749872, lr=1e-3 -> to improve BSQ, added another conv2D 1x1 kernel and ConvTranspose to upscale width height properly and another Gelu, Note increasing channel size did not help
+	- BEST BSQPAE RESULTS: 30/30 train/loss=0.00319, validation/loss=0.00373 -> overfitted couldve done 3 or 4 epochs ,5 epochs lr=1e-3, PatchAutoEncoder(PAE): Patchify -> Conv 3x3 kernel padding 1 stride 1 -> gelu -> ConvTransp 3x3 kernel padding 1 stride 1 -> gelu -> Unpatchify
+		- interesting that it trained slower and started with a high loss then got so low
+		- changes made was kernel 1x1 to 3x3 for extra conv layers and ordering of the gelu and convs
+- Trained PAE and BSQPAE on cpu
+- learning rate could be adjusted in train.py but left as is being 1e-3 for all 3 models
+
+python -m homework.tokenize homework/BSQPatchAutoEncoder.pth data/tokenized_train.pth data/train/
+python -m homework.tokenize homework/BSQPatchAutoEncoder.pth data/tokenized_valid.pth data/valid/
+
+AutoReg error:
+RuntimeError: shape '[1, 1, 6000, 6000]' is invalid for input of size 360000
+    attn_mask_expanded = attn_mask.view(1, 1, seq_len, seq_len).expand(
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: shape '[1, 1, 6000, 6000]' is invalid for input of size 360000
+input size of x in AutoReg's forward: 64, 20,30,10
+Output of Encoder and decoder of PAE is as expected:
+torch.Size([2560, 4, 6, 128])
+torch.Size([2560, 100, 150, 3])
+-> I FIXED THE ABOVE ERROR, problem was in the BSQPatchAutoEncoder's encoder_index and decoder_index functions, I was getting confused on what to do (using BSQ's encoder or encoder_index and likewise for BSQ's decoder). 
+-> Supposed to call PAE encoder then BSQ's encoder_index method then for the decoder_index, do BSQ's decoder_index then PAE decoder
+
+- AutoRegressive
+	- input: tokenized images generated from BSQ model (batch x height x width)
+	- Flatten input to (batch x (height*width))
+	- Embedding Layer
+	- Shift output of embedding layer along token dimension to avoid model cheating by looking at current location's token (NOT supposed to shift the mask)
+	- + sin cos positional encoding
+	- TransformerEncoder
+		- torch.nn.Transformer.generate_square_subsequent_mask() as the mask
+		- is_causal=True
+		- TransformerEncoderLayer`
+			- num_layers=6
+			- num_heads=8
+			- dim_feedforward=2048
+			- norm_first=True
+			- batch_first=True
+	- Linear 
+	- DO NOT PERFORM SOFTMAX, expecting logits and not probabilties and logits come from the linear layer so that is the last layer
+	- d_latent=128 -> increasing to 256, with above setup, loss was stuck at 6e+3 loss -> so making model too big can be bad
+	- 3.8M params -> # params/weights
+	
+	- main change needed to get model working was performing the shfiting properly and setting the padded token correctly
+		- shift along token dimension and set the first token to just 0s
+		
+	train/loss=1.52e+3, validation/loss=2.8e+3 , 5 epcohs, lr=1e-3, val loss decreased across epochs so could train more
+	- Autoregressive prediction loss [ 15 / 15 ]
+	- Check autoregressiveness of the model [ 15 / 15 ]
+	-> 30/30 for auto reg
