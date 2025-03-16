@@ -12,28 +12,6 @@ def load() -> torch.nn.Module:
     return torch.load(model_path, weights_only=False)
 
 import math
-def sinusoidal_positional_encoding(seq_len, d_model):
-    
-    """
-    Generate sinusoidal positional encodings for the input sequence.
-
-    :param seq_len: Length of the input sequence (number of tokens).
-    :param d_model: Dimensionality of the model (size of the embedding).
-    :return: Tensor of shape (seq_len, d_model) with positional encodings.
-    """
-    # Create a matrix of shape (seq_len, d_model)
-    pe = torch.zeros(seq_len, d_model)
-    
-    # Position indices (i) and dimension indices (2 * k)
-    position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)  # Shape: (seq_len, 1)
-    div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))  # Shape: (d_model // 2)
-
-    # Calculate sine and cosine for each position and each dimension
-    pe[:, 0::2] = torch.sin(position * div_term)  # Apply sin to even indices (2k)
-    pe[:, 1::2] = torch.cos(position * div_term)  # Apply cos to odd indices (2k + 1)
-    
-    return pe
-
 def get_positional_encoding(seq_len, d_model):
     position = torch.arange(seq_len).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
@@ -85,7 +63,7 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
     Hint: You can complete this homework without using positional embeddings
     """
 
-    def __init__(self, d_latent: int = 256, n_tokens: int = 2**10):
+    def __init__(self, d_latent: int = 128, n_tokens: int = 2**10):
         super().__init__()
         #raise NotImplementedError()
          
@@ -104,10 +82,10 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         """
         
         # params corresponding to transformer layer
-        num_layers=5
+        num_layers=6   # 3 , 512
         num_heads=8
-        dim_feedforward=1024 # default was 2048 which is too much, this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
-        dropout=0.1 # 0.1 used in transformer paper
+        dim_feedforward=2048 # default was 2048 which is too much, this corresponds to the linear(d_model, dim_feedforward), relu(), linear(dim_feedforward, d_model)
+        #dropout=0.1 # 0.1 used in transformer paper
         # norm_first=True: in deeplearning lecture, doing norm first before attention was better but not done in orig transformer paper
         #activation="relu" # can change to use gelu
         # we set batch_first=True bc our input's first dimension is batch
@@ -119,7 +97,7 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         - Best so far: num_layyers=1, dim_feedforward=512
         """
         
-        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, dropout=dropout, norm_first=False, batch_first=True, activation='relu')
+        encoder_layer=torch.nn.TransformerEncoderLayer(d_model=d_latent, nhead=num_heads, dim_feedforward=dim_feedforward, norm_first=True, batch_first=True)
 
         # Model LAYERS
         self.embed=torch.nn.Embedding(num_embeddings=n_tokens, embedding_dim=d_latent)
@@ -129,7 +107,9 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         #self.layer_norm=torch.nn.LayerNorm(n_tokens)
         
         self.linear=torch.nn.Linear(d_latent, n_tokens)
-        self.softmax=torch.nn.Softmax(dim=-1) # softmax bc want to output probabities
+        #self.softmax=torch.nn.Softmax(dim=-1) # DONT use softmax bc want logits not probabilities and logits comes from output of the linear layer so linear is final layer
+        
+        # dimension params for embedding, transformer, and linear are correct
         
         """
         Softmax Example:
@@ -214,10 +194,11 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         
         """
         Flatten
+        - Turn tokenized image of size height x width to a flattened vector of tokens
         - The shape of the input before flattening is shape of x torch.Size([64, 20, 30]) -> 64 corresponds to batch_size
         - The shape of the input after flattening is shape of x torch.Size([64, 600])
         """
-        x=torch.flatten(x, start_dim=1).to(device) # start_dim=1 bc dont want to flatten the batch dimension so start flattening at dim 1
+        x=torch.flatten(x, start_dim=1) # start_dim=1 bc dont want to flatten the batch dimension so start flattening at dim 1
         #print(x.shape) # torch.Size([64, 600])
         
         """
@@ -225,16 +206,9 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         """
         #print(x)
         
-        
         x=self.embed(x) 
-        #print(x.shape) # torch.Size([64, 600, 128])
-        
-        
-        # positional_encoding = sinusoidal_positional_encoding(seq_len=sequence_len, d_model=x.shape[2])[:sequence_len, :].unsqueeze(0).to(device)
-        # x=x+positional_encoding
-        
-        positional_encoding = get_positional_encoding(seq_len=sequence_len, d_model=x.shape[2])
-        x = x + positional_encoding.to(device)
+        #print(x.shape) # torch.Size([64, 600, 128]) # (batch x sequence_len x embed_dim) 
+        # -> sequence_len is the token dimension each represented by a 128 size vector
         
         """
         Shift on output of embedding
@@ -258,23 +232,73 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
                 [[ 0.0000, -0.6706,  0.4162],
                 [ 0.0000, -1.3510,  1.8573],
                 [ 0.0000, -1.6018,  0.1288]]])
+        -> THIS IS INCORRECT SHIFTING
         """
-        x=torch.roll(x, shifts=1, dims=-1) # dims=-1
-        x[:,:,0]=0 # do not make this float("-inf") bc loss becomes nan
-        #x[:,0]=0
+        # x=torch.roll(x, shifts=1, dims=-1) # dims=-1
+        # x[:,:,0]=0 
+        
+        # Correct Shifting
+        x=torch.roll(x, shifts=1, dims=1) # shfit along token dimension so dim 1 (batch x sequence_len x embded_dim)
+        x[:,0,:]=0 # padded token to first token/row of x
+        # do not make padded token float("-inf") bc loss becomes nan -> does not correspond to mask's -inf meaning (doesnt read it as dont visit that spot and instead will perform computation's with it so def do not use -inf)
+        """
+        Correct Shifting Toy Example:
+        - perform shifting on output of embedding layer so after it
+        - after embedding layer we have (batch x seuqenceLength_OR_numOfTokens x embed_dim)
+        - so each image represented by tokens and each token is represented by a vector of size embed_dim-> from embedding layer
+        - we want to shift the tokens by 1 so model doesnt cheat by looking at current locations's token so shift by 1 along the token dimension (dim=1)
+        - then place zeros or some padded token in the first token's vector just as placeholder so x[:,0,:]=0 
+        
+        import torch
+        input=torch.randn(2,3,3)
+        print(input, "\n")
+        shifted_x = torch.roll(input, shifts=1, dims=1) 
+        print(shifted_x, "\n")
+        shifted_x[:,0,:]=0
+        print(shifted_x)
+        
+        tensor([[[ 1.4988, -0.6574, -0.1588],
+                [-1.8557, -0.0216,  0.3114],
+                [-1.2772,  2.6398, -1.1519]],
+
+                [[ 0.0350,  1.8701,  0.0237],
+                [ 0.8347, -0.6082,  1.1372],
+                [ 1.6094,  0.3436, -0.4911]]]) 
+
+        tensor([[[-1.2772,  2.6398, -1.1519],
+                [ 1.4988, -0.6574, -0.1588],
+                [-1.8557, -0.0216,  0.3114]],
+
+                [[ 1.6094,  0.3436, -0.4911],
+                [ 0.0350,  1.8701,  0.0237],
+                [ 0.8347, -0.6082,  1.1372]]]) 
+
+        tensor([[[ 0.0000,  0.0000,  0.0000],
+                [ 1.4988, -0.6574, -0.1588],
+                [-1.8557, -0.0216,  0.3114]],
+
+                [[ 0.0000,  0.0000,  0.0000],
+                [ 0.0350,  1.8701,  0.0237],
+                [ 0.8347, -0.6082,  1.1372]]])
+        - can see first token is filled with zeros (as like a padding) and the tokens shifted down 1
+        """
  
-      
+        positional_encoding = get_positional_encoding(seq_len=sequence_len, d_model=x.shape[2])
+        x = x + positional_encoding.to(device)
         
         x=self.transformer_encoder(x, mask=mask, is_causal=True) # set is_causal to true bc the mask we're using is causal meaning mask that prevents from looking at future tokens
         #print(x.shape) # torch.Size([64, 600, 128])
         
+        #x=self.relu(x)
+         
         x=self.linear(x)
         #print(x.shape) # torch.Size([64, 600, 1024])
         
-        #x=self.relu(x)
+       
         #x=self.layer_norm(x)
-        x=self.softmax(x)
-        #print(x) 
+        
+        # DO NOT USE SOFTMAX bc output is expected to be logits not probabilities and logits come from the above linear layer so linear layer should be the last layer
+        #x=self.softmax(x) 
         #print(x.shape) # torch.Size([64, 600, 1024])
         #print(x.sum(dim=-1))
         return x, {}
