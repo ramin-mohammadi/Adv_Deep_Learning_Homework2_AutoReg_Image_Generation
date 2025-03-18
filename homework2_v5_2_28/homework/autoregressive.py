@@ -305,7 +305,28 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
         
     # This is for part 4 (the generate part of the assignment)
     def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None) -> torch.Tensor:  # noqa
-        raise NotImplementedError()
+        #raise NotImplementedError()
+        img = torch.zeros((B,h,w), dtype=torch.long).to(device) # do not pass in -1 or will get cuda error when shifting in forward()
+        img_shape=img.shape
+        index=0
+        for height_i in range(img_shape[1]):
+          for width_j in range(img_shape[2]):
+              # Skip if not to be filled (-1)
+                # if (img[:,height_i,width_j] != -1).all().item():
+                #     continue
+                # pred = forward(img[:,height_i,width_j]) #-> doesnt work, dimension issues
+                pred, _ = self.forward(img[:,:height_i+1,:]) # need the +1
+                #pred = self.forward(img)
+                # if index==0:
+                #     print(pred.shape)
+             
+                probs = torch.nn.functional.softmax(pred[:, index, :], dim=-1)
+                #if index==0:
+                #  print(probs.shape)
+                #  print(torch.multinomial(probs, num_samples=1).squeeze(dim=-1).shape)
+                img[:,height_i,width_j] = torch.multinomial(probs, num_samples=1).squeeze(dim=-1)
+                index+=1
+        return img
 
 
 
