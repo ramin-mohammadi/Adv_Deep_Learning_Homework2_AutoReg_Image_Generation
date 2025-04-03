@@ -306,29 +306,84 @@ class AutoregressiveModel(torch.nn.Module, Autoregressive):
     # This is for part 4 (the generate part of the assignment)
     def generate(self, B: int = 1, h: int = 30, w: int = 20, device=None) -> torch.Tensor:  # noqa
         #raise NotImplementedError()
-        img = torch.zeros((B,h,w), dtype=torch.long).to(device) # do not pass in -1 or will get cuda error when shifting in forward()
-        img_shape=img.shape
-        index=0
-        for height_i in range(img_shape[1]):
-          for width_j in range(img_shape[2]):
-              # Skip if not to be filled (-1)
-                # if (img[:,height_i,width_j] != -1).all().item():
-                #     continue
-                # pred = forward(img[:,height_i,width_j]) #-> doesnt work, dimension issues
-                pred, _ = self.forward(img[:,:height_i+1,:]) # need the +1
-                #pred = self.forward(img)
-                # if index==0:
-                #     print(pred.shape)
+        # img = torch.zeros((B,h,w), dtype=torch.long).to(device) # do not pass in -1 or will get cuda error when shifting in forward()
+        # img_shape=img.shape
+        # index=0
+        # for height_i in range(img_shape[1]):
+        #   for width_j in range(img_shape[2]):
+        #       # Skip if not to be filled (-1)
+        #         # if (img[:,height_i,width_j] != -1).all().item():
+        #         #     continue
+        #         # pred = forward(img[:,height_i,width_j]) #-> doesnt work, dimension issues
+        #         pred, _ = self.forward(img[:,:height_i+1,:]) # need the +1
+        #         #pred = self.forward(img)
+        #         # if index==0:
+        #         #     print(pred.shape)
              
-                probs = torch.nn.functional.softmax(pred[:, index, :], dim=-1)
-                #if index==0:
-                #  print(probs.shape)
-                #  print(torch.multinomial(probs, num_samples=1).squeeze(dim=-1).shape)
-                img[:,height_i,width_j] = torch.multinomial(probs, num_samples=1).squeeze(dim=-1)
-                index+=1
-        return img
-
-
+        #         probs = torch.nn.functional.softmax(pred[:, index, :], dim=-1)
+        #         #if index==0:
+        #         #  print(probs.shape)
+        #         #  print(torch.multinomial(probs, num_samples=1).squeeze(dim=-1).shape)
+        #         img[:,height_i,width_j] = torch.multinomial(probs, num_samples=1).squeeze(dim=-1)
+        #         index+=1
+        # return img
+        
+        # img = torch.zeros((B,h,w), dtype=torch.long).to(device)
+        # index=0
+        # for height_i in range(img.shape[1]):
+        #     for width_j in range(img.shape[2]):
+        #         pred, _ = self.forward(img[:,:height_i+1,:width_j+1])  # need the +1 (b/c say :2 would acquire only indexes 0,1)
+        #         print(pred.shape)
+        #         print(height_i, width_j, index)
+        #         # print(pred)
+        #         # if index==0:
+        #         #     print(pred.shape)
+        #         probs = torch.nn.functional.softmax(pred[:, index, :], dim=-1)
+        #         # if index==0:
+        #         #     print(probs.shape)
+        #         #     print(torch.multinomial(probs, num_samples=1).squeeze(dim=-1).shape)
+        #         img[:,height_i,width_j] = torch.multinomial(probs, num_samples=1).squeeze(dim=-1) # .squeeze bc multinomial produces an extra dimension
+        #         index+=1
+        # return img
+        
+        """
+        Ideal Generation implementation
+        - initialize tensor of zeros of expected image generation shape (batch, h, w)
+        - loop through pixels h,w
+            - call autoreg model's forward() but pass in only UP TO the ith, jth pixel then auto reg produces 
+            logits of (batch, h*w, n_tokens), so every row (dimension h*w) is the set of logits of all possible 
+            tokens for that ith, jth pixel
+            - turn the logits for the ith, jth pixel into probabilities using softmax only on the pixel 
+            being looked at (here represented by index variable -> ith jth pixel) and softmax across the n_tokens dimensions. 
+            These probabilties represent the distribution of possible tokens for that ith jth pixel
+            - Now want to sample from the distribution of possible tokens to acquire the ith jth pixel's token
+            - Repeat until acquired token for every ith, jth pixel
+            
+        - NOTE: we pass in tokens autoregressively (we start off with zeros, pass in up to the ith jth pixel, and after every token 
+        acquired by sampling from generated probs, that predicted token is passed into the next call to 
+        forward bc we pass in up to the ith jth pixel so model is using tokens it has predicted to predict next possible tokens)
+        
+        - IMPORTANT: Inside of forward() it expects (batch, height, width) and does flattenting already. But if we pass in [:, :height_i+1, :width_j+1],
+        this indexing wont work once we go to next iter of height_i (b/c the indexing of :width_j+1 will disregard the first row of pixels we just went through )
+        Solution: Flatten input before calling forward and add an extra dummy dimension using .unsqueeze(-1). This will allow auto reg indexing the up to the ith pixel and solves the problem of forward() expecting (batch, height, width). Then, lastly after acquiring sampled tokens, reshape the tensor to be shape (batch, height, width). Also, for future reference, I had a dimensionality mismatch issue bc I was unzqueezing the output of the multinomial so I got rid of it and fixed issue.
+        """
+        
+        img = torch.zeros((B,h,w), dtype=torch.long).flatten(start_dim=1).unsqueeze(-1).to(device)
+        # print(img.shape)
+        for pixel_i in range(img.shape[1]):
+            pred, _ = self.forward(img[:, :pixel_i+1])
+            # if pixel_i==0:
+            #     print(pred.shape)
+            probs = torch.nn.functional.softmax(pred[:, pixel_i, :], dim=-1)
+            # if pixel_i==0:
+            #     print(probs.shape)
+            #     print(img[:,pixel_i].shape)
+            #     print(torch.multinomial(probs, num_samples=1).shape)
+            img[:,pixel_i] = torch.multinomial(probs, num_samples=1)
+        # img = img.reshape(B, h, w)
+        # print("Image generated shape: ", img.shape)
+        # print("Image generated values:\n", img)
+        return img.reshape(B,h,w)
 
 
 """
