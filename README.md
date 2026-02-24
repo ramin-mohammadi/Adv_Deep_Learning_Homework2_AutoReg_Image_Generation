@@ -1,23 +1,23 @@
 # Binary Spherical Quantization (BSQ) Autoencoder and Autoregressive Image Generation Model (PyTorch)   
 ![BSQ](BSQ_output.png)
-- sample images after going through BSQ autoencoder (encoded, quantized, then reconstructed using decoder)
+- reconstructed images after going through BSQ autoencoder (encoded, quantized, then reconstructed using decoder)
 
 ![gen_4](gen_images/generation_4.png)
 ![gen_5](gen_images/generation_5.png)
 ![gen_18](gen_images/generation_18.png)
-- sample generated images from taking zero-noise of quantized patches of images, acquiring the logits among vocabulary of 2^10 codebook bits to represent each image patch, using autoregressive model and  ...
+- generated images by taking initial noise of zeros then multinomial sampling tokens representing quantized patches of an image using the logits acquired from the autoregressive model, then taking the sampled tokens and feeding into the BSQ's decoder to reconstruct the sampled quantized image patches into their pixel representations
 
 
 ## Architecture
 ### BSQ Auto-Encoder
 - Encoder
-  - The encoder continually increases the embedding dimension (last dim) and the superseding dimensions decrease (heigh and width), so continually larger subsections of the image are represented with larger embeddings using logits from previous layers -> receptive field increases to extract higher level features in the image
+  - The encoder continually increases the embedding dimension (last dim) and the superseding dimensions decrease (height and width), so continually larger subsections of the image are represented with larger embeddings using logits from previous layers -> receptive field increases to extract higher level features in the image
   - convolution operation
-    - element wise multiplication and summation to get a scalar. Kernel window's weights are the same ... Advantage compared to linear layer operation ....  
+    - element wise multiplication and summation to get a scalar. Each input channel has their own their own kernel window (it's own unique/updated weights). Advantage compared to linear layer operation is you significantly reduce the # of weights when working with input sizes like images  
 - Binary Spherical Quantizer
   - 
 - Decoder
-  - Learns to rebuild original image from latent space encoder representation. Because our autoregressive model's vocabulary are integers from our BSQ's codebook bits latent space, the purpose of the decoder here is to provide the pixel representation of the generated logits from the BSQ latent space
+  - Learns to rebuild original image from latent space encoder representation. Because our autoregressive model's embedding vocabulary are integers from our BSQ's codebook bits' latent space, the purpose of the decoder here is to provide the pixel representation of the sampled tokens from the BSQ's quantized latent space
 
 Auto Encoder Layers (builds a deeper learned representation/understanding of input)
 - Conv2d()
@@ -74,7 +74,7 @@ Auto Decoder Layers
   - Kernel 25x25
   - Stride 25
   - Height and width 6x4 -> 150x100 -> back to original hxw
-
+  - 
 
 - torch.nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride=1, padding=0, output_padding=0, groups=1, bias=True, dilation=1, padding_mode='zeros', device=None, dtype=None)
 
