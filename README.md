@@ -1,5 +1,6 @@
 # Binary Spherical Quantization (BSQ) Autoencoder and Autoregressive Image Generation Model (PyTorch)   
 - Advances in Deep Learning course at UT Austin during Spring 2025 semester
+
 ![BSQ](BSQ_output.png)
 - reconstructed images after going through BSQ autoencoder (encoded, quantized, then reconstructed using decoder)
 
